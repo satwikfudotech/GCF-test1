@@ -1,40 +1,55 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
+    "context"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net/http"
 
-	"gcf-worker/loadgen"
+    "example.com/gcf-worker/loadgen"
 )
 
-// Request payload expected from Master
-type LoadRequest struct {
-	TargetURL   string `json:"target_url"`
-	Requests    int    `json:"requests"`
-	Concurrency int    `json:"concurrency"`
+type LoadTestRequest struct {
+    TargetURL   string `json:"target_url"`
+    Concurrency int    `json:"concurrency"`
+    Requests    int    `json:"requests"`
 }
 
-// Google Function entry point
+type LoadTestResponse struct {
+    TotalRequests int     `json:"total_requests"`
+    SuccessCount  int     `json:"success_count"`
+    FailCount     int     `json:"fail_count"`
+    AvgLatencyMs  float64 `json:"avg_latency_ms"`
+    ThroughputRps float64 `json:"throughput_rps"`
+}
+
 func LoadgenHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+    var req LoadTestRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "invalid request", http.StatusBadRequest)
+        return
+    }
 
-	var req LoadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
+    log.Printf("Received load test request: %+v", req)
 
-	// Run the load generator
-	results := loadgen.Run(ctx, req.TargetURL, req.Requests, req.Concurrency)
+    res := loadgen.RunLoadTest(req.TargetURL, req.Concurrency, req.Requests)
 
-	// Marshal results back as JSON
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(results); err != nil {
-		log.Printf("failed to encode response: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-	}
-	fmt.Println("✅ Loadgen executed:", req)
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(LoadTestResponse{
+        TotalRequests: res.TotalRequests,
+        SuccessCount:  res.SuccessCount,
+        FailCount:     res.FailCount,
+        AvgLatencyMs:  res.AvgLatencyMs,
+        ThroughputRps: res.ThroughputRps,
+    })
+}
+
+func main() {
+    http.HandleFunc("/", LoadgenHTTP)
+    port := "8080"
+    log.Printf("Listening on port %s", port)
+    if err := http.ListenAndServe(":"+port, nil); err != nil {
+        log.Fatal(err)
+    }
 }
