@@ -1,0 +1,3 @@
+module gcf-worker
+
+go 1.24.3

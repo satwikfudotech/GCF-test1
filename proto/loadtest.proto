@@ -1,0 +1,41 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+
+	"gcf-worker/loadgen"
+	proto "gcf-worker/proto"
+)
+
+// Request payload expected from Master
+type LoadRequest struct {
+	TargetURL   string `json:"target_url"`
+	Requests    int    `json:"requests"`
+	Concurrency int    `json:"concurrency"`
+}
+
+// Google Function entry point
+func LoadgenHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+
+	var req LoadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Run the load generator
+	results := loadgen.Run(ctx, req.TargetURL, req.Requests, req.Concurrency)
+
+	// Marshal results back as JSON
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(results); err != nil {
+		log.Printf("failed to encode response: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+	fmt.Println("✅ Loadgen executed:", req)
+}
