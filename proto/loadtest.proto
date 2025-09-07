@@ -1,41 +1,26 @@
-package main
+syntax = "proto3";
 
-import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
+package loadtest;
 
-	"gcf-worker/loadgen"
-	proto "gcf-worker/proto"
-)
 
-// Request payload expected from Master
-type LoadRequest struct {
-	TargetURL   string `json:"target_url"`
-	Requests    int    `json:"requests"`
-	Concurrency int    `json:"concurrency"`
+option go_package = "gcf-worker/proto;loadtest";
+
+// Request message
+message LoadTestRequest {
+  int32 num_requests = 1;
+  int32 concurrency = 2;
+  string payload = 3;
 }
 
-// Google Function entry point
-func LoadgenHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+// Response message
+message LoadTestResponse {
+  int32 success_count = 1;
+  int32 failure_count = 2;
+  double avg_latency_ms = 3;
+  double throughput_rps = 4;
+}
 
-	var req LoadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Run the load generator
-	results := loadgen.Run(ctx, req.TargetURL, req.Requests, req.Concurrency)
-
-	// Marshal results back as JSON
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(results); err != nil {
-		log.Printf("failed to encode response: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-	}
-	fmt.Println("✅ Loadgen executed:", req)
+// gRPC Service
+service LoadTestService {
+  rpc RunTest (LoadTestRequest) returns (LoadTestResponse);
 }
