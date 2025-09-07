@@ -1,4 +1,4 @@
-module gcf-worker
+module example.com/gcf-worker
 
 go 1.24.3
 
