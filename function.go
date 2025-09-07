@@ -5,15 +5,17 @@ import (
 	"log"
 	"net/http"
 
-	"example.com/gcf-worker/loadgen"
+	"example.com/gcf-worker/loadgen" // make sure this matches your module name in go.mod
 )
 
+// LoadTestRequest represents the expected request body
 type LoadTestRequest struct {
 	TargetURL   string `json:"target_url"`
 	Concurrency int    `json:"concurrency"`
 	Requests    int    `json:"requests"`
 }
 
+// LoadTestResponse represents the response returned after running the load test
 type LoadTestResponse struct {
 	TotalRequests int     `json:"total_requests"`
 	SuccessCount  int     `json:"success_count"`
@@ -22,8 +24,10 @@ type LoadTestResponse struct {
 	ThroughputRps float64 `json:"throughput_rps"`
 }
 
+// LoadgenHTTP is the Google Cloud Function entry point
 func LoadgenHTTP(w http.ResponseWriter, r *http.Request) {
 	var req LoadTestRequest
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
@@ -34,20 +38,14 @@ func LoadgenHTTP(w http.ResponseWriter, r *http.Request) {
 	res := loadgen.RunLoadTest(req.TargetURL, req.Concurrency, req.Requests)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(LoadTestResponse{
+	if err := json.NewEncoder(w).Encode(LoadTestResponse{
 		TotalRequests: res.TotalRequests,
 		SuccessCount:  res.SuccessCount,
 		FailCount:     res.FailCount,
 		AvgLatencyMs:  res.AvgLatencyMs,
 		ThroughputRps: res.ThroughputRps,
-	})
-}
-
-func main() {
-	http.HandleFunc("/", LoadgenHTTP)
-	port := "8080"
-	log.Printf("Listening on port %s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatal(err)
+	}); err != nil {
+		log.Printf("Failed to encode response: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
 }
