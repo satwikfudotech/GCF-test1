@@ -1,50 +1,71 @@
 package loadgen
 
 import (
-	"context"
-	"net/http"
-	"sync"
-	"time"
+    "net/http"
+    "sync"
+    "time"
 )
 
 type Result struct {
-	Success     bool          `json:"success"`
-	Latency     time.Duration `json:"latency"`
-	StatusCode  int           `json:"status_code"`
+    TotalRequests int
+    SuccessCount  int
+    FailCount     int
+    AvgLatencyMs  float64
+    ThroughputRps float64
 }
 
-func Run(ctx context.Context, target string, totalReq int, concurrency int) []Result {
-	results := make([]Result, 0, totalReq)
-	client := &http.Client{Timeout: 10 * time.Second}
+func RunLoadTest(target string, concurrency int, requests int) Result {
+    var mu sync.Mutex
+    var wg sync.WaitGroup
 
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, concurrency)
+    successes := 0
+    failures := 0
+    latencies := []float64{}
 
-	for i := 0; i < totalReq; i++ {
-		wg.Add(1)
-		semaphore <- struct{}{} // limit concurrency
+    startTime := time.Now()
 
-		go func() {
-			defer wg.Done()
-			start := time.Now()
-			resp, err := client.Get(target)
-			latency := time.Since(start)
+    sem := make(chan struct{}, concurrency)
 
-			res := Result{}
-			if err != nil {
-				res = Result{Success: false, Latency: latency, StatusCode: 0}
-			} else {
-				res = Result{Success: resp.StatusCode == 200, Latency: latency, StatusCode: resp.StatusCode}
-				resp.Body.Close()
-			}
+    for i := 0; i < requests; i++ {
+        wg.Add(1)
+        sem <- struct{}{}
+        go func() {
+            defer wg.Done()
+            defer func() { <-sem }()
 
-			mu.Lock()
-			results = append(results, res)
-			mu.Unlock()
-			<-semaphore
-		}()
-	}
-	wg.Wait()
-	return results
+            start := time.Now()
+            resp, err := http.Get(target)
+            latency := time.Since(start).Milliseconds()
+
+            mu.Lock()
+            latencies = append(latencies, float64(latency))
+            if err == nil && resp.StatusCode == http.StatusOK {
+                successes++
+            } else {
+                failures++
+            }
+            mu.Unlock()
+        }()
+    }
+
+    wg.Wait()
+    totalDuration := time.Since(startTime).Seconds()
+
+    avgLatency := 0.0
+    for _, l := range latencies {
+        avgLatency += l
+    }
+    if len(latencies) > 0 {
+        avgLatency /= float64(len(latencies))
+    }
+
+    throughput := float64(requests) / totalDuration
+
+    return Result{
+        TotalRequests: requests,
+        SuccessCount:  successes,
+        FailCount:     failures,
+        AvgLatencyMs:  avgLatency,
+        ThroughputRps: throughput,
+    }
 }
