@@ -5,17 +5,15 @@ import (
 	"log"
 	"net/http"
 
-	"example.com/gcf-worker/loadgen" // make sure this matches your module name in go.mod
+	"example.com/gcf-worker/loadgen" // must match your go.mod
 )
 
-// LoadTestRequest represents the expected request body
 type LoadTestRequest struct {
 	TargetURL   string `json:"target_url"`
 	Concurrency int    `json:"concurrency"`
 	Requests    int    `json:"requests"`
 }
 
-// LoadTestResponse represents the response returned after running the load test
 type LoadTestResponse struct {
 	TotalRequests int     `json:"total_requests"`
 	SuccessCount  int     `json:"success_count"`
@@ -24,10 +22,8 @@ type LoadTestResponse struct {
 	ThroughputRps float64 `json:"throughput_rps"`
 }
 
-// LoadgenHTTP is the Google Cloud Function entry point
 func LoadgenHTTP(w http.ResponseWriter, r *http.Request) {
 	var req LoadTestRequest
-
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
