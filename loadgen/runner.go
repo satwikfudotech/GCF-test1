@@ -1,71 +1,87 @@
 package loadgen
 
 import (
-    "net/http"
-    "sync"
-    "time"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
 )
 
-type Result struct {
-    TotalRequests int
-    SuccessCount  int
-    FailCount     int
-    AvgLatencyMs  float64
-    ThroughputRps float64
+type LoadRequest struct {
+	TargetURL   string `json:"target_url"`
+	Requests    int    `json:"requests"`
+	Concurrency int    `json:"concurrency"`
 }
 
-func RunLoadTest(target string, concurrency int, requests int) Result {
-    var mu sync.Mutex
-    var wg sync.WaitGroup
+type Result struct {
+	Success    bool          `json:"success"`
+	Latency    time.Duration `json:"latency"`
+	StatusCode int           `json:"status_code"`
+}
 
-    successes := 0
-    failures := 0
-    latencies := []float64{}
+// Cloud Function entry point
+func Handler(w http.ResponseWriter, r *http.Request) {
+	var req LoadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
 
-    startTime := time.Now()
+	// Limit max batch per worker
+	const maxBatch = 1000
+	const maxConcurrency = 100
 
-    sem := make(chan struct{}, concurrency)
+	total := req.Requests
+	results := []Result{}
 
-    for i := 0; i < requests; i++ {
-        wg.Add(1)
-        sem <- struct{}{}
-        go func() {
-            defer wg.Done()
-            defer func() { <-sem }()
+	for total > 0 {
+		batch := maxBatch
+		if total < batch {
+			batch = total
+		}
 
-            start := time.Now()
-            resp, err := http.Get(target)
-            latency := time.Since(start).Milliseconds()
+		concurrency := req.Concurrency
+		if concurrency > maxConcurrency {
+			concurrency = maxConcurrency
+		}
 
-            mu.Lock()
-            latencies = append(latencies, float64(latency))
-            if err == nil && resp.StatusCode == http.StatusOK {
-                successes++
-            } else {
-                failures++
-            }
-            mu.Unlock()
-        }()
-    }
+		fmt.Printf("Running batch of %d requests with concurrency %d\n", batch, concurrency)
+		batchResults := runBatch(req.TargetURL, batch, concurrency)
+		results = append(results, batchResults...)
 
-    wg.Wait()
-    totalDuration := time.Since(startTime).Seconds()
+		total -= batch
+	}
 
-    avgLatency := 0.0
-    for _, l := range latencies {
-        avgLatency += l
-    }
-    if len(latencies) > 0 {
-        avgLatency /= float64(len(latencies))
-    }
+	// Return all results to master
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
+}
 
-    throughput := float64(requests) / totalDuration
+func runBatch(target string, total, concurrency int) []Result {
+	results := make([]Result, 0, total)
+	sem := make(chan struct{}, concurrency)
 
-    return Result{
-        TotalRequests: requests,
-        SuccessCount:  successes,
-        FailCount:     failures,
-        AvgLatencyMs:  avgLatency,
-        ThroughputRps: throughput,
-    }
+	for i := 0; i < total; i++ {
+		sem <- struct{}{}
+		go func() {
+			start := time.Now()
+			resp, err := http.Get(target)
+			latency := time.Since(start)
+
+			res := Result{Latency: latency}
+			if err == nil {
+				res.StatusCode = resp.StatusCode
+				res.Success = resp.StatusCode == 200
+				resp.Body.Close()
+			}
+			results = append(results, res)
+			<-sem
+		}()
+	}
+
+	// wait
+	for i := 0; i < cap(sem); i++ {
+		sem <- struct{}{}
+	}
+	return results
 }
