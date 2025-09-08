@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// Result stores the outcome of the test
 type Result struct {
 	TotalRequests int
 	SuccessCount  int
@@ -15,57 +14,88 @@ type Result struct {
 	ThroughputRps float64
 }
 
-// RunLoadTest runs a simple load test
-func RunLoadTest(target string, concurrency, requests int) Result {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
+// RunLoadTest executes requests in batches with concurrency limits
+func RunLoadTest(target string, concurrency, totalRequests int) Result {
+	const maxBatch = 1000
+	const maxConcurrency = 100
 
-	successCount := 0
-	failCount := 0
-	latencies := []float64{}
+	var allLatencies []time.Duration
+	success := 0
+	fail := 0
 
+	remaining := totalRequests
 	start := time.Now()
 
-	sem := make(chan struct{}, concurrency)
+	for remaining > 0 {
+		batch := maxBatch
+		if remaining < batch {
+			batch = remaining
+		}
 
-	for i := 0; i < requests; i++ {
+		c := concurrency
+		if c > maxConcurrency {
+			c = maxConcurrency
+		}
+
+		bSuccess, bFail, latencies := runBatch(target, batch, c)
+		success += bSuccess
+		fail += bFail
+		allLatencies = append(allLatencies, latencies...)
+
+		remaining -= batch
+	}
+
+	totalTime := time.Since(start).Seconds()
+
+	// compute avg latency
+	var sum time.Duration
+	for _, l := range allLatencies {
+		sum += l
+	}
+	avgLatency := float64(sum.Milliseconds()) / float64(len(allLatencies))
+
+	return Result{
+		TotalRequests: totalRequests,
+		SuccessCount:  success,
+		FailCount:     fail,
+		AvgLatencyMs:  avgLatency,
+		ThroughputRps: float64(totalRequests) / totalTime,
+	}
+}
+
+func runBatch(target string, total, concurrency int) (int, int, []time.Duration) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
+	success := 0
+	fail := 0
+	var mu sync.Mutex
+	latencies := make([]time.Duration, 0, total)
+
+	for i := 0; i < total; i++ {
 		wg.Add(1)
 		sem <- struct{}{}
-
 		go func() {
 			defer wg.Done()
-			defer func() { <-sem }()
-
-			startTime := time.Now()
+			start := time.Now()
 			resp, err := http.Get(target)
-			latency := time.Since(startTime).Milliseconds()
+			latency := time.Since(start)
 
 			mu.Lock()
-			defer mu.Unlock()
-			latencies = append(latencies, float64(latency))
-			if err == nil && resp.StatusCode == http.StatusOK {
-				successCount++
+			latencies = append(latencies, latency)
+			if err == nil && resp.StatusCode == 200 {
+				success++
 			} else {
-				failCount++
+				fail++
 			}
+			mu.Unlock()
+
+			if resp != nil {
+				resp.Body.Close()
+			}
+			<-sem
 		}()
 	}
 
 	wg.Wait()
-	elapsed := time.Since(start).Seconds()
-
-	// calculate average latency
-	var totalLatency float64
-	for _, l := range latencies {
-		totalLatency += l
-	}
-	avgLatency := totalLatency / float64(len(latencies))
-
-	return Result{
-		TotalRequests: requests,
-		SuccessCount:  successCount,
-		FailCount:     failCount,
-		AvgLatencyMs:  avgLatency,
-		ThroughputRps: float64(requests) / elapsed,
-	}
+	return success, fail, latencies
 }
